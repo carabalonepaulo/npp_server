@@ -19,7 +19,6 @@ use slab::Slab;
 use crate::{
     events::{ListenerEvent, LuaEvent},
     generic_result::GenericResult,
-    spawn, Result,
 };
 
 enum ClientCommand {
@@ -70,7 +69,7 @@ async fn lua_event_handler(
     shutdown_sender: oneshot::Sender<Shutdown>,
     sender: Sender<ListenerCommand>,
     receiver: Receiver<LuaEvent>,
-) -> Result<()> {
+) -> GenericResult<()> {
     let mut receiver = receiver.fuse();
 
     loop {
