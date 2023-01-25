@@ -42,36 +42,20 @@ struct Shutdown;
 #[derive(Debug)]
 struct Trigger;
 
-pub async fn run(
-    sender: Sender<ListenerEvent>,
-    mut receiver: Receiver<LuaEvent>,
-) -> GenericResult<()> {
+pub async fn run(sender: Sender<ListenerEvent>, mut receiver: Receiver<LuaEvent>) {
     println!("Listener started!");
 
     let (listener_command_sender, listener_command_receiver) = unbounded::<ListenerCommand>();
-    let (shutdown_sender, shutdown_receiver) = oneshot::channel::<Shutdown>();
 
-    task::spawn(lua_event_handler(
-        shutdown_sender,
-        listener_command_sender.clone(),
-        receiver,
-    ));
     task::spawn(command_handler(sender, listener_command_receiver));
-    task::spawn(accept_loop(listener_command_sender));
-
-    shutdown_receiver.await;
+    task::spawn(accept_loop(listener_command_sender.clone()));
+    task::block_on(lua_event_handler(listener_command_sender, receiver));
 
     println!("Listener finalized.");
-    Ok(())
 }
 
-async fn lua_event_handler(
-    shutdown_sender: oneshot::Sender<Shutdown>,
-    sender: Sender<ListenerCommand>,
-    receiver: Receiver<LuaEvent>,
-) -> GenericResult<()> {
+async fn lua_event_handler(sender: Sender<ListenerCommand>, receiver: Receiver<LuaEvent>) {
     let mut receiver = receiver.fuse();
-
     loop {
         let event_option = receiver.next().await;
         if event_option.is_none() {
@@ -94,15 +78,12 @@ async fn lua_event_handler(
             }
         };
     }
-
-    shutdown_sender.send(Shutdown);
-    Ok(())
 }
 
 async fn command_handler(
     listener_event_sender: Sender<ListenerEvent>,
     receiver: Receiver<ListenerCommand>,
-) -> GenericResult<()> {
+) {
     let mut clients: Slab<Sender<ClientCommand>> = Slab::new();
     let mut receiver = receiver.fuse();
 
@@ -121,18 +102,21 @@ async fn command_handler(
                 id_sender.send(id).unwrap();
                 listener_event_sender
                     .send(ListenerEvent::ClientConnected(id))
-                    .await?;
+                    .await
+                    .unwrap();
             }
             ListenerCommand::ClientDisconnected(id) => {
                 clients.remove(id);
                 listener_event_sender
                     .send(ListenerEvent::CliendDisconnected(id))
-                    .await?
+                    .await
+                    .unwrap();
             }
             ListenerCommand::LineReceived(id, line) => {
                 listener_event_sender
                     .send(ListenerEvent::LineReceived(id, line))
-                    .await?
+                    .await
+                    .unwrap();
             }
             ListenerCommand::SendTo(id, line) => {
                 if clients.contains(id) {
@@ -162,12 +146,10 @@ async fn command_handler(
             }
         }
     }
-
-    Ok(())
 }
 
-async fn accept_loop(listener_command_sender: Sender<ListenerCommand>) -> GenericResult<()> {
-    let listener = TcpListener::bind("127.0.0.1:5000").await?;
+async fn accept_loop(listener_command_sender: Sender<ListenerCommand>) {
+    let listener = TcpListener::bind("127.0.0.1:5000").await.unwrap();
     let mut stream = listener.incoming().fuse();
 
     loop {
@@ -191,14 +173,12 @@ async fn accept_loop(listener_command_sender: Sender<ListenerCommand>) -> Generi
         ));
         task::spawn(send_loop(writer, client_command_receiver));
     }
-
-    Ok(())
 }
 
 async fn send_loop(
     mut writer: WriteHalf<TcpStream>,
     client_command_receiver: Receiver<ClientCommand>,
-) -> GenericResult<()> {
+) {
     let mut receiver = client_command_receiver.fuse();
     loop {
         match receiver.next().await {
@@ -215,23 +195,23 @@ async fn send_loop(
             None => break,
         }
     }
-    Ok(())
 }
 
 async fn receive_loop(
     reader: ReadHalf<TcpStream>,
     listener_command_sender: Sender<ListenerCommand>,
     client_command_sender: Sender<ClientCommand>,
-) -> GenericResult<()> {
+) {
     let (id_sender, id_receiver) = oneshot::channel::<usize>();
     listener_command_sender
         .send(ListenerCommand::ClientConnected(
             id_sender,
             client_command_sender,
         ))
-        .await?;
+        .await
+        .unwrap();
 
-    let id = id_receiver.await?;
+    let id = id_receiver.await.unwrap();
     let reader = BufReader::new(reader);
     let mut lines = reader.lines().fuse();
 
@@ -257,6 +237,4 @@ async fn receive_loop(
         .send(ListenerCommand::ClientDisconnected(id))
         .await
         .unwrap();
-
-    Ok(())
 }
