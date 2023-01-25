@@ -2,18 +2,17 @@ use async_std::channel::{Receiver, Sender};
 use futures::StreamExt;
 use rlua::{Function, Lua, Table, ToLuaMulti};
 
-use crate::{
-    events::{ListenerEvent, LuaEvent},
-    generic_result::GenericResult,
-    module::server,
-};
+use crate::{listener, module::server};
 
 const GLOBAL_MODULES: &str = "modules";
 
-pub async fn run(
-    sender: Sender<LuaEvent>,
-    mut receiver: Receiver<ListenerEvent>,
-) -> GenericResult<()> {
+pub enum Command {
+    ClientConnected(usize),
+    ClientDisconnected(usize),
+    LineReceived(usize, String),
+}
+
+pub async fn run(sender: Sender<listener::Command>, mut receiver: Receiver<Command>) {
     println!("Lua started!");
 
     let state = Lua::new();
@@ -22,13 +21,11 @@ pub async fn run(
     loop {
         if let Some(ev) = receiver.next().await {
             match ev {
-                ListenerEvent::ClientConnected(id) => {
-                    call(&state, "server", "on_client_connected", id)
-                }
-                ListenerEvent::CliendDisconnected(id) => {
+                Command::ClientConnected(id) => call(&state, "server", "on_client_connected", id),
+                Command::ClientDisconnected(id) => {
                     call(&state, "server", "on_client_disconnected", id)
                 }
-                ListenerEvent::LineReceived(id, line) => {
+                Command::LineReceived(id, line) => {
                     call(&state, "server", "on_line_received", (id, line));
                 }
             }
@@ -38,8 +35,6 @@ pub async fn run(
     }
 
     println!("Lua finalized.");
-
-    Ok(())
 }
 
 fn call<A>(state: &Lua, module: &str, function: &str, args: A)
@@ -55,7 +50,7 @@ where
     });
 }
 
-fn add_global_modules(state: &Lua, sender: Sender<LuaEvent>) {
+fn add_global_modules(state: &Lua, listener_sender: Sender<listener::Command>) {
     state.context(|ctx| {
         ctx.load(
             r#"
@@ -77,5 +72,5 @@ end
             .unwrap();
     });
 
-    server::register(state, sender);
+    server::register(state, listener_sender);
 }

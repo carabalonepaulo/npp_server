@@ -3,46 +3,46 @@ use std::fs;
 use async_std::channel::Sender;
 use rlua::{Function, Lua, Table};
 
-use crate::events::LuaEvent;
+use crate::listener::Command;
 
-pub fn register(state: &Lua, sender: Sender<LuaEvent>) {
+pub fn register(state: &Lua, listener_sender: Sender<Command>) {
     let code = fs::read_to_string("./scripts/init.lua").unwrap();
     state.context(move |ctx| {
-        let send_to_sender = sender.clone();
+        let send_to_sender = listener_sender.clone();
         let send_to = ctx
             .create_function(move |_, (id, line): (usize, String)| {
-                send_to_sender.try_send(LuaEvent::SendTo(id, line)).unwrap();
+                send_to_sender.try_send(Command::SendTo(id, line)).unwrap();
                 Ok(())
             })
             .unwrap();
 
-        let send_to_all_sender = sender.clone();
+        let send_to_all_sender = listener_sender.clone();
         let send_to_all = ctx
             .create_function(move |_, line: String| {
                 send_to_all_sender
-                    .try_send(LuaEvent::SendToAll(line))
+                    .try_send(Command::SendToAll(line))
                     .unwrap();
                 Ok(())
             })
             .unwrap();
 
-        let kick_sender = sender.clone();
+        let kick_sender = listener_sender.clone();
         let kick = ctx
             .create_function(move |_, id: usize| {
-                kick_sender.try_send(LuaEvent::Kick(id)).unwrap();
+                kick_sender.try_send(Command::Kick(id)).unwrap();
                 Ok(())
             })
             .unwrap();
 
-        let kick_all_sender = sender.clone();
+        let kick_all_sender = listener_sender.clone();
         let kick_all = ctx
             .create_function(move |_, ()| {
-                kick_all_sender.try_send(LuaEvent::KickAll).unwrap();
+                kick_all_sender.try_send(Command::KickAll).unwrap();
                 Ok(())
             })
             .unwrap();
 
-        let shutdown_sender = sender.clone();
+        let shutdown_sender = listener_sender.clone();
         let shutdown = ctx
             .create_function(move |ctx, ()| {
                 let globals = ctx.globals();
@@ -51,7 +51,7 @@ pub fn register(state: &Lua, sender: Sender<LuaEvent>) {
                 let running = server.get("running").unwrap();
 
                 if running {
-                    shutdown_sender.try_send(LuaEvent::Shutdown).unwrap();
+                    shutdown_sender.try_send(Command::Shutdown).unwrap();
                     server.set("running", false).unwrap();
                 }
 
