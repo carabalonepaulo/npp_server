@@ -1,18 +1,25 @@
+use std::{process::Output, rc::Rc};
+
 use async_std::{
     channel::{unbounded, Receiver, Sender},
     io::prelude::BufReadExt,
     io::BufReader,
-    net::{TcpListener, TcpStream},
+    net::{Incoming, TcpListener, TcpStream},
     sync::Arc,
-    sync::Mutex,
+    sync::{Mutex, RwLock},
     task,
 };
-use futures::{channel::oneshot, AsyncWriteExt, StreamExt};
+use futures::{
+    channel::oneshot,
+    io::{ReadHalf, WriteHalf},
+    AsyncReadExt, AsyncWriteExt, Future, FutureExt, StreamExt,
+};
 use slab::Slab;
 
 use crate::{
     events::{ListenerEvent, LuaEvent},
     generic_result::GenericResult,
+    spawn, Result,
 };
 
 enum ClientCommand {
@@ -24,24 +31,81 @@ enum ListenerCommand {
     ClientConnected(oneshot::Sender<usize>, Sender<ClientCommand>),
     ClientDisconnected(usize),
     LineReceived(usize, String),
+    SendTo(usize, String),
+    SendToAll(String),
+    Kick(usize),
+    KickAll,
+    Shutdown,
 }
 
-pub async fn run(sender: Sender<ListenerEvent>, receiver: Receiver<LuaEvent>) -> GenericResult<()> {
+struct Shutdown;
+
+#[derive(Debug)]
+struct Trigger;
+
+pub async fn run(
+    sender: Sender<ListenerEvent>,
+    mut receiver: Receiver<LuaEvent>,
+) -> GenericResult<()> {
     println!("Listener started!");
 
     let (listener_command_sender, listener_command_receiver) = unbounded::<ListenerCommand>();
+    let (shutdown_sender, shutdown_receiver) = oneshot::channel::<Shutdown>();
 
+    task::spawn(lua_event_handler(
+        shutdown_sender,
+        listener_command_sender.clone(),
+        receiver,
+    ));
     task::spawn(command_handler(sender, listener_command_receiver));
-    task::spawn(accept_loop(listener_command_sender)).await;
+    task::spawn(accept_loop(listener_command_sender));
 
+    shutdown_receiver.await;
+
+    println!("Listener finalized.");
+    Ok(())
+}
+
+async fn lua_event_handler(
+    shutdown_sender: oneshot::Sender<Shutdown>,
+    sender: Sender<ListenerCommand>,
+    receiver: Receiver<LuaEvent>,
+) -> Result<()> {
+    let mut receiver = receiver.fuse();
+
+    loop {
+        let event_option = receiver.next().await;
+        if event_option.is_none() {
+            break;
+        }
+
+        match event_option.unwrap() {
+            LuaEvent::SendTo(id, line) => sender
+                .send(ListenerCommand::SendTo(id, line))
+                .await
+                .unwrap(),
+            LuaEvent::SendToAll(line) => {
+                sender.send(ListenerCommand::SendToAll(line)).await.unwrap()
+            }
+            LuaEvent::Kick(id) => sender.send(ListenerCommand::Kick(id)).await.unwrap(),
+            LuaEvent::KickAll => sender.send(ListenerCommand::KickAll).await.unwrap(),
+            LuaEvent::Shutdown => {
+                sender.send(ListenerCommand::Shutdown).await.unwrap();
+                break;
+            }
+        };
+    }
+
+    shutdown_sender.send(Shutdown);
     Ok(())
 }
 
 async fn command_handler(
     listener_event_sender: Sender<ListenerEvent>,
-    mut receiver: Receiver<ListenerCommand>,
+    receiver: Receiver<ListenerCommand>,
 ) -> GenericResult<()> {
     let mut clients: Slab<Sender<ClientCommand>> = Slab::new();
+    let mut receiver = receiver.fuse();
 
     loop {
         let command_option = receiver.next().await;
@@ -71,6 +135,32 @@ async fn command_handler(
                     .send(ListenerEvent::LineReceived(id, line))
                     .await?
             }
+            ListenerCommand::SendTo(id, line) => {
+                if clients.contains(id) {
+                    clients[id].send(ClientCommand::Send(line)).await.unwrap();
+                }
+            }
+            ListenerCommand::SendToAll(line) => {
+                for (key, sender) in clients.iter() {
+                    sender
+                        .send(ClientCommand::Send(line.clone()))
+                        .await
+                        .unwrap();
+                }
+            }
+            ListenerCommand::Kick(id) => {
+                clients[id].send(ClientCommand::Shutdown).await.unwrap();
+            }
+            ListenerCommand::KickAll => {
+                for (_, sender) in clients.iter() {
+                    sender.send(ClientCommand::Shutdown).await.unwrap();
+                }
+            }
+            ListenerCommand::Shutdown => {
+                for (_, sender) in clients.iter() {
+                    sender.send(ClientCommand::Shutdown).await.unwrap();
+                }
+            }
         }
     }
 
@@ -79,7 +169,7 @@ async fn command_handler(
 
 async fn accept_loop(listener_command_sender: Sender<ListenerCommand>) -> GenericResult<()> {
     let listener = TcpListener::bind("127.0.0.1:5000").await?;
-    let mut stream = listener.incoming();
+    let mut stream = listener.incoming().fuse();
 
     loop {
         let client_stream_option = stream.next().await;
@@ -92,51 +182,49 @@ async fn accept_loop(listener_command_sender: Sender<ListenerCommand>) -> Generi
             continue;
         }
 
-        let client = Arc::new(Mutex::new(client_stream_result.unwrap()));
+        let (reader, writer) = client_stream_result.unwrap().split();
         let (client_command_sender, client_command_receiver) = unbounded::<ClientCommand>();
 
         task::spawn(receive_loop(
-            client.clone(),
+            reader,
             listener_command_sender.clone(),
             client_command_sender.clone(),
         ));
-        task::spawn(send_loop(client, client_command_receiver));
+        task::spawn(send_loop(writer, client_command_receiver));
     }
 
     Ok(())
 }
 
 async fn send_loop(
-    client: Arc<Mutex<TcpStream>>,
-    mut client_command_receiver: Receiver<ClientCommand>,
+    mut writer: WriteHalf<TcpStream>,
+    client_command_receiver: Receiver<ClientCommand>,
 ) -> GenericResult<()> {
+    let mut receiver = client_command_receiver.fuse();
     loop {
-        match client_command_receiver.next().await {
+        match receiver.next().await {
             Some(command) => match command {
-                ClientCommand::Send(line) => {
-                    let mut stream = &*client.lock().await;
-                    stream.write(line.as_bytes()).await?;
+                ClientCommand::Send(mut line) => {
+                    line.push('\n');
+                    writer.write(line.as_bytes()).await;
                 }
                 ClientCommand::Shutdown => {
-                    let mut stream = &*client.lock().await;
-                    stream.close().await?;
+                    writer.close().await.unwrap();
                     break;
                 }
             },
             None => break,
         }
     }
-
     Ok(())
 }
 
 async fn receive_loop(
-    client: Arc<Mutex<TcpStream>>,
+    reader: ReadHalf<TcpStream>,
     listener_command_sender: Sender<ListenerCommand>,
     client_command_sender: Sender<ClientCommand>,
 ) -> GenericResult<()> {
     let (id_sender, id_receiver) = oneshot::channel::<usize>();
-
     listener_command_sender
         .send(ListenerCommand::ClientConnected(
             id_sender,
@@ -145,9 +233,8 @@ async fn receive_loop(
         .await?;
 
     let id = id_receiver.await?;
-    let stream = &*client.lock().await;
-    let reader = BufReader::new(stream);
-    let mut lines = reader.lines();
+    let reader = BufReader::new(reader);
+    let mut lines = reader.lines().fuse();
 
     loop {
         let line_option = lines.next().await;
@@ -163,12 +250,14 @@ async fn receive_loop(
         let line = line_result.unwrap();
         listener_command_sender
             .send(ListenerCommand::LineReceived(id, line))
-            .await?;
+            .await
+            .unwrap();
     }
 
     listener_command_sender
         .send(ListenerCommand::ClientDisconnected(id))
-        .await?;
+        .await
+        .unwrap();
 
     Ok(())
 }

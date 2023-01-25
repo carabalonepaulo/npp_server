@@ -8,8 +8,8 @@ pub enum ListenerEvent {
 #[derive(Debug)]
 pub enum LuaEvent {
     SendTo(usize, String),
-    SendToAll(usize, String),
+    SendToAll(String),
     Kick(usize),
-    KickALl(usize),
+    KickAll,
     Shutdown,
 }
