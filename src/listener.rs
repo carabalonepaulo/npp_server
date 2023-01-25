@@ -1,25 +1,18 @@
-use std::{process::Output, rc::Rc};
-
 use async_std::{
     channel::{unbounded, Receiver, Sender},
     io::prelude::BufReadExt,
     io::BufReader,
-    net::{Incoming, TcpListener, TcpStream},
-    sync::Arc,
-    sync::{Mutex, RwLock},
+    net::{TcpListener, TcpStream},
     task,
 };
 use futures::{
     channel::oneshot,
     io::{ReadHalf, WriteHalf},
-    AsyncReadExt, AsyncWriteExt, Future, FutureExt, StreamExt,
+    AsyncReadExt, AsyncWriteExt, StreamExt,
 };
 use slab::Slab;
 
-use crate::{
-    events::{ListenerEvent, LuaEvent},
-    generic_result::GenericResult,
-};
+use crate::events::{ListenerEvent, LuaEvent};
 
 enum ClientCommand {
     Send(String),
@@ -37,12 +30,10 @@ enum ListenerCommand {
     Shutdown,
 }
 
-struct Shutdown;
-
 #[derive(Debug)]
 struct Trigger;
 
-pub async fn run(sender: Sender<ListenerEvent>, mut receiver: Receiver<LuaEvent>) {
+pub async fn run(sender: Sender<ListenerEvent>, receiver: Receiver<LuaEvent>) {
     println!("Listener started!");
 
     let (listener_command_sender, listener_command_receiver) = unbounded::<ListenerCommand>();
@@ -124,7 +115,7 @@ async fn command_handler(
                 }
             }
             ListenerCommand::SendToAll(line) => {
-                for (key, sender) in clients.iter() {
+                for (_, sender) in clients.iter() {
                     sender
                         .send(ClientCommand::Send(line.clone()))
                         .await
@@ -185,7 +176,7 @@ async fn send_loop(
             Some(command) => match command {
                 ClientCommand::Send(mut line) => {
                     line.push('\n');
-                    writer.write(line.as_bytes()).await;
+                    writer.write(line.as_bytes()).await.unwrap();
                 }
                 ClientCommand::Shutdown => {
                     writer.close().await.unwrap();

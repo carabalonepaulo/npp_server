@@ -1,9 +1,6 @@
-use async_std::{
-    channel::{unbounded, Receiver, Sender},
-    fs, task,
-};
+use async_std::channel::{Receiver, Sender};
 use futures::StreamExt;
-use rlua::{FromLuaMulti, Function, Lua, Table, ToLuaMulti};
+use rlua::{Function, Lua, Table, ToLuaMulti};
 
 use crate::{
     events::{ListenerEvent, LuaEvent},
@@ -26,10 +23,10 @@ pub async fn run(
         if let Some(ev) = receiver.next().await {
             match ev {
                 ListenerEvent::ClientConnected(id) => {
-                    call(&state, "server", "on_client_connected", (id))
+                    call(&state, "server", "on_client_connected", id)
                 }
                 ListenerEvent::CliendDisconnected(id) => {
-                    call(&state, "server", "on_client_disconnected", (id))
+                    call(&state, "server", "on_client_disconnected", id)
                 }
                 ListenerEvent::LineReceived(id, line) => {
                     call(&state, "server", "on_line_received", (id, line));
@@ -45,25 +42,6 @@ pub async fn run(
     Ok(())
 }
 
-/*
-rlua::function::Function
-pub fn call<A, R>(&self, args: A) -> Result<R>
-where
-    A: ToLuaMulti<'lua>,
-    R: FromLuaMulti<'lua>,
-
-fn call<T>(&self, func_id: ValueId, args: T)
-    where
-        T: for<'a> rlua::ToLuaMulti<'a>,
-    {
-        self.state.context(move |ctx| {
-            let globals = ctx.globals();
-            let func: rlua::Function = globals.get(func_id as usize).unwrap();
-            func.call::<_, ()>(args).unwrap();
-        });
-    }
-*/
-
 fn call<A>(state: &Lua, module: &str, function: &str, args: A)
 where
     A: for<'a> ToLuaMulti<'a>,
@@ -73,7 +51,7 @@ where
         let modules: Table = globals.get(GLOBAL_MODULES).unwrap();
         let server: Table = modules.get(module).unwrap();
         let callback: Function = server.get(function).unwrap();
-        callback.call::<_, ()>(args);
+        callback.call::<_, ()>(args).unwrap();
     });
 }
 
@@ -91,7 +69,8 @@ _G.require = function(path)
 end
         "#,
         )
-        .exec();
+        .exec()
+        .unwrap();
 
         ctx.globals()
             .set(GLOBAL_MODULES, ctx.create_table().unwrap())

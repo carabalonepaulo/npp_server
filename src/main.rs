@@ -1,5 +1,3 @@
-#![allow(unused)]
-
 mod events;
 mod generic_result;
 mod listener;
@@ -8,7 +6,6 @@ mod module;
 
 use async_std::{channel::unbounded, task};
 use events::{ListenerEvent, LuaEvent};
-use futures::Future;
 
 fn main() -> generic_result::GenericResult<()> {
     let (listener_sender, listener_receiver) = unbounded::<ListenerEvent>();

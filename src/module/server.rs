@@ -1,9 +1,9 @@
 use std::fs;
 
 use async_std::channel::Sender;
-use rlua::{Function, Lua, Table, UserData};
+use rlua::{Function, Lua, Table};
 
-use crate::{events::LuaEvent, module::Module};
+use crate::events::LuaEvent;
 
 pub fn register(state: &Lua, sender: Sender<LuaEvent>) {
     let code = fs::read_to_string("./scripts/init.lua").unwrap();
@@ -60,15 +60,15 @@ pub fn register(state: &Lua, sender: Sender<LuaEvent>) {
             .unwrap();
 
         let server = ctx.create_table().unwrap();
-        server.set("running", true);
-        server.set("send_to", send_to);
-        server.set("send_to_all", send_to_all);
-        server.set("kick", kick);
-        server.set("kick_all", kick_all);
-        server.set("shutdown", shutdown);
+        server.set("running", true).unwrap();
+        server.set("send_to", send_to).unwrap();
+        server.set("send_to_all", send_to_all).unwrap();
+        server.set("kick", kick).unwrap();
+        server.set("kick_all", kick_all).unwrap();
+        server.set("shutdown", shutdown).unwrap();
 
         let modules: Table = ctx.globals().get("modules").unwrap();
-        modules.set("server", server);
+        modules.set("server", server).unwrap();
 
         ctx.load(code.as_bytes()).exec().unwrap();
     });
@@ -78,6 +78,6 @@ pub fn register(state: &Lua, sender: Sender<LuaEvent>) {
         let modules: Table = globals.get("modules").unwrap();
         let server: Table = modules.get("server").unwrap();
         let on_initialize: Function = server.get("on_initialize").unwrap();
-        on_initialize.call::<_, ()>(());
+        on_initialize.call::<_, ()>(()).unwrap();
     });
 }

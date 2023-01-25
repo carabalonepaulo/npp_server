@@ -1,5 +1,4 @@
 local server = require 'server'
-local packet = require 'scripts.packet'
 local router = require 'scripts.router'
 
 --[[
@@ -11,7 +10,6 @@ server.shutdown()
 ]]
 
 function server.on_initialize()
-  -- server.shutdown()
 end
 
 function server.on_finalize()
@@ -32,5 +30,5 @@ function server.on_line_received(id, line)
 end
 
 function server.on_tick(dt)
-  error('not implemented yet')
+  print('update ' .. tostring(dt))
 end
