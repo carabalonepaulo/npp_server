@@ -8,7 +8,6 @@ return {
 
   send_to = function(id, tag, content)
     local end_tag = tag:sub(1, 1) .. '/' .. tag:sub(2, tag:len())
-    print(tag .. content .. end_tag)
     server.send_to(id, tag .. content .. end_tag)
   end,
 

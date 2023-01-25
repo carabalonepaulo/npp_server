@@ -10,11 +10,10 @@ pub enum Command {
     ClientConnected(usize),
     ClientDisconnected(usize),
     LineReceived(usize, String),
+    Shutdown,
 }
 
 pub async fn run(sender: Sender<listener::Command>, mut receiver: Receiver<Command>) {
-    println!("Lua started!");
-
     let state = Lua::new();
     add_global_modules(&state, sender.clone());
 
@@ -28,13 +27,14 @@ pub async fn run(sender: Sender<listener::Command>, mut receiver: Receiver<Comma
                 Command::LineReceived(id, line) => {
                     call(&state, "server", "on_line_received", (id, line));
                 }
+                Command::Shutdown => break,
             }
         } else {
             break;
         }
     }
 
-    println!("Lua finalized.");
+    call(&state, "server", "on_finalize", ());
 }
 
 fn call<A>(state: &Lua, module: &str, function: &str, args: A)

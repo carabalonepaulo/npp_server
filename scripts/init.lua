@@ -10,10 +10,11 @@ server.shutdown()
 ]]
 
 function server.on_initialize()
+  print('server started')
 end
 
 function server.on_finalize()
-  error('not implemented yet')
+  print('server stopped')
 end
 
 function server.on_client_connected(id)

@@ -39,12 +39,8 @@ pub async fn run(
     listener_sender: Sender<Command>,
     listener_receiver: Receiver<Command>,
 ) {
-    println!("Listener started!");
-
     task::spawn(accept_loop(listener_sender));
     task::block_on(command_handler(lua_sender, listener_receiver.clone()));
-
-    println!("Listener finalized.");
 }
 
 async fn command_handler(lua_sender: Sender<lua::Command>, receiver: Receiver<Command>) {
@@ -107,6 +103,7 @@ async fn command_handler(lua_sender: Sender<lua::Command>, receiver: Receiver<Co
                 for (_, sender) in clients.iter() {
                     sender.send(ClientCommand::Shutdown).await.unwrap();
                 }
+                lua_sender.send(lua::Command::Shutdown).await.unwrap();
                 break;
             }
         }
